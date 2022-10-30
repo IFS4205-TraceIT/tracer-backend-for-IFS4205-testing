@@ -1,0 +1,140 @@
+name: Tracer Backend CI
+on: [push, pull_request]
+
+# Variables
+env:
+  VAULT_ADDR: "http://vault:8200"
+  DJANGO_DEBUG: "True"
+  POETRY_VERSION: "1.2.0"
+  VAULT_VERSION: "1.11.4"
+
+jobs:
+  tracer-backend-ci:
+    # Only run on runners with the 'ci' label
+    runs-on: ci
+
+    container: python:3.10-slim
+
+    services:
+      database_auth:
+        image: postgres
+        env:
+          POSTGRES_DB: "traceit"
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        
+        options: >-
+          --health-cmd pg_isready 
+          --health-interval 10s 
+          --health-timeout 5s 
+          --health-retries 5
+      
+      database_main:
+        image: postgres
+        env:
+          POSTGRES_DB: "traceit"
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        
+        options: >-
+          --health-cmd pg_isready 
+          --health-interval 10s 
+          --health-timeout 5s 
+          --health-retries 5
+
+      vault:
+        image: vault
+        env:
+          # Used by the vault server
+          VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+          VAULT_DEV_ROOT_TOKEN_ID: ${{ secrets.VAULT_ROOT_TOKEN }}
+
+          # Used by the installed vault client
+          VAULT_ADDR: ${{ env.VAULT_ADDR }}
+          VAULT_TOKEN: ${{ secrets.VAULT_ROOT_TOKEN }}
+
+    steps: 
+      - name: Cleanup build folder
+        run: |
+          rm -rf ./* || true
+          rm -rf ./.??* || true
+
+      - name: Clone repo
+        uses: actions/checkout@v3
+
+      - name: Install Poetry
+        uses: abatilo/actions-poetry@v2
+        with:
+          poetry-version: ${{ env.POETRY_VERSION }}
+
+      - name: Load cached virtual environment
+        id: cached-poetry-dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pypoetry/virtualenvs
+          key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+
+      - name: Install Python packages
+        run: |
+          poetry config --local virtualenvs.options.no-setuptools true
+          poetry config --local virtualenvs.options.no-pip true
+          poetry install --no-interaction
+
+      - name: Migrate Database
+        run: |
+          poetry run python manage.py migrate
+          poetry run python manage.py migrate --database main_db
+        env:
+          DJANGO_DEBUG: ${{ env.DJANGO_DEBUG }}
+          DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+          POSTGRES_HOST: "database_main"
+          POSTGRES_PORT: "5432"
+          POSTGRES_DB: "traceit"
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_AUTH_HOST: "database_auth"
+          POSTGRES_AUTH_PORT: "5432"
+          POSTGRES_AUTH_DB: "traceit"
+          POSTGRES_AUTH_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_AUTH_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          VAULT_ADDR: ${{ env.VAULT_ADDR }}
+          VAULT_TOKEN: ${{ secrets.VAULT_ROOT_TOKEN }}
+
+      - name: Download Vault zip
+        uses: wei/wget@v1
+        with:
+          args: -O vault.zip https://releases.hashicorp.com/vault/${{ env.VAULT_VERSION }}/vault_${{ env.VAULT_VERSION }}_linux_amd64.zip
+
+      - name: Uncompress Vault zip
+        uses: montudor/action-zip@v1
+        with:
+          args: unzip -qq vault.zip
+      
+      - name: Enable required secret engines
+        run: |
+          export PATH=$(pwd):$PATH
+          vault secrets enable totp
+          vault secrets enable kv
+          vault secrets enable kv-v2
+        env:
+          VAULT_ADDR: ${{ env.VAULT_ADDR }}
+          VAULT_TOKEN: ${{ secrets.VAULT_ROOT_TOKEN }}
+
+      - name: Run tests
+        run: |
+          poetry run python manage.py test
+        env:
+          DJANGO_DEBUG: ${{ env.DJANGO_DEBUG }}
+          DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+          POSTGRES_HOST: "database_main"
+          POSTGRES_PORT: "5432"
+          POSTGRES_DB: "traceit"
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_AUTH_HOST: "database_auth"
+          POSTGRES_AUTH_PORT: "5432"
+          POSTGRES_AUTH_DB: "traceit"
+          POSTGRES_AUTH_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_AUTH_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          VAULT_ADDR: ${{ env.VAULT_ADDR }}
+          VAULT_TOKEN: ${{ secrets.VAULT_ROOT_TOKEN }}

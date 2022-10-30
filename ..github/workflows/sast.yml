@@ -1,0 +1,37 @@
+name: SAST
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+  schedule:
+    # Set to run everyday at 12am SGT = 4pm UTC
+    - cron: '0 16 * * *' 
+
+jobs:
+  semgrep:
+    runs-on: ci
+    container: 
+      image: returntocorp/semgrep
+      options: --dns 8.8.8.8
+
+    steps:
+
+      - name: Cleanup folder
+        run: |
+          rm -rf ./* || true
+          rm -rf ./.??* || true
+
+      - name: Clone repository
+        uses: actions/checkout@v3
+        
+      - name: Run PyCharm Security
+        uses: tonybaloney/pycharm-security@master
+
+      - name: Run semgrep
+        run: semgrep ci
+        env:
+           # Add the rules that Semgrep uses by setting the SEMGREP_RULES environment variable. 
+           SEMGREP_RULES: p/default p/security-audit p/owasp-top-ten p/ci p/python p/django p/jwt p/xss p/secrets p/r2c-bug-scan p/trailofbits p/sql-injection
+
